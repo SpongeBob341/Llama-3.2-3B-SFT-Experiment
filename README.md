@@ -1,4 +1,4 @@
-# LLMA-O: AI Assistant with Llama 3.2-3B
+# LLMAI: AI Assistant with Llama 3.2-3B
 
 ---
 
