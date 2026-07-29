@@ -79,23 +79,38 @@ We ingest and format three preference datasets:
 
 ---
 
-## Choices & Whys
+## Decision Conflicts & Strategy Comparisons
 
-### Why SFT to ORPO (Two-Stage)?
-Instead of a single-phase training or complex RLHF with separate reward models, we opted for:
-1. **Stage 1 (QLoRA SFT):** Implants base skills, logical reasoning, and instructions.
-2. **Stage 2 (QLoRA ORPO):** Directly optimizes the odds-ratio of chosen vs. rejected outputs. Because ORPO has an internal SFT loss component, it doesn't drift away from the base skills, provided the `chosen` responses are high-quality.
+Building this data pipeline involved resolving several critical strategy conflicts, choosing between dataset scaling, alignment algorithms, and formatting constraints:
 
-### Why replace Alpaca with OpenHermes-2.5?
-Alpaca contains a lot of noisy, synthetic generation from older GPT-3 models. OpenHermes-2.5 represents clean, modern GPT-4 generations that teach cleaner instruction-following logic, aligning with our "Quality > Quantity" design choice.
+### 1. Alignment Algorithm: DPO vs. ORPO vs. RLHF
+* **Conflict:** We needed a parameter-efficient alignment method to teach safety and truthfulness.
+  * *RLHF (Reinforcement Learning from Human Feedback)* requires training a separate reward model and running PPO, which is too resource-heavy and complex for a 3B model under resource constraints.
+  * *DPO (Direct Preference Optimization)* is highly popular but notoriously unstable. DPO training caused severe regression, breaking the model's ability to hold basic interactions.
+* **Resolution:** We chose **ORPO (Odds-Ratio Preference Optimization)**. ORPO merges SFT and preference alignment into a single loss function. By penalizing the odds ratio of rejected responses relative to chosen ones directly during training, ORPO eliminates the need for a reference model or a reward model. Combined with a conservative learning rate and ultra-high-quality `chosen` preference samples, ORPO prevents the policy degradation seen in DPO.
 
-### Why filter out long sequences instead of truncating them?
-If you truncate a training sample to 512 tokens:
-- You lose the completion response (the target output).
-- The model trains on predicting an abrupt cutoff instead of the `<|end_of_text|>` end token.
-Proactive filtering ensures the model only trains on complete, logical round-trips.
+### 2. Dataset Philosophy: Scale vs. Cleanliness (88k vs. ~60k Samples)
+* **Conflict:** The reference project trained on 88,031 samples. To reproduce or beat this, should we maximize sample volume or focus on quality?
+  * *Volume-centric* approaches include noisier, older synthetic datasets like Alpaca, which can introduce contradictions and lower-tier GPT-3 habits.
+  * *Curation-centric* approaches restrict sample sizes but leverage cleaner, GPT-4 level instructions.
+* **Resolution:** Locked in **Quality-First Curation** (~35k-45k SFT samples, ~20k ORPO preference pairs). We completely replaced Alpaca with **OpenHermes-2.5** (GPT-4 tier instruction data). This guarantees the model learns high-fidelity reasoning patterns, proving that a smaller, cleaner dataset outperforms a larger, noisier one.
+
+### 3. Evaluation Safeguard: Contamination vs. Knowledge Coverage
+* **Conflict:** To teach the model general knowledge, common sense, and truthfulness, it is tempting to train on datasets like MMLU, CommonsenseQA, and TruthfulQA. However, these are standard evaluation benchmarks.
+* **Resolution:** We chose **Strict Benchmark Quarantine**. Including these datasets in the training split causes data leakage, making downstream evaluation metrics useless. We explicitly excluded these datasets from all SFT and ORPO pipelines, reserving them purely as clean, unseen evaluation benchmarks for Phase 5.
+
+### 4. Sequence Length Limit: Truncation vs. Discard/Filtering
+* **Conflict:** To respect the hard memory constraint of `max_seq_length = 512` (necessary for T4 VRAM limits), how should we handle sequences exceeding this length?
+  * *Truncating* keeps the sample count high but chops off the completion and the trailing `<|end_of_text|>` token.
+  * *Filtering (Discarding)* preserves completion formatting but reduces total dataset size.
+* **Resolution:** We chose **Filtering (Discarding)**. Truncation is highly destructive; if the model trains on truncated completions, it learns to generate cut-off responses and never learns the stop token, causing infinite rambling at inference. Correct formatting behavior is prioritized over raw sample count.
+
+### 5. Dialog Format: Built-in Chat Template vs. Alpaca Schema
+* **Conflict:** Instruct models use built-in Chat Templates (like Llama-3-Instruct's Jinja template). Since we are fine-tuning the base `Llama-3.2-3B` model (which lacks pre-training on a specific instruct format), using standard chat templates might introduce mismatched pre-training signals.
+* **Resolution:** We locked in the **Alpaca Prompt Schema** (using `Instruction:`, `### Input:`, and `### Response:` blocks). This is simple, consistent, maps perfectly to both instruction-only and context-inclusive samples, and ensures 1-to-1 parity between our training formatting and the downstream inference server.
 
 ---
+
 
 ## Reflections
 
