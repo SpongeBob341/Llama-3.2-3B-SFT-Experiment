@@ -1,4 +1,4 @@
-# LLMA-O: AI Assistant with Llama 3.2-3B
+# LLMAI: AI Assistant with Llama 3.2-3B
 
 ---
 
@@ -16,18 +16,18 @@ I want to build a project that produces a working fine-tuned model. The goal now
 | Phase | Folder | Topic | Status |
 |-------|--------|-------|--------|
 | 1 | [`phase1/`](./phase1/) | Tokenizer Explorer — how the model sees text |  Done |
-| 2 | `phase2/` | Data Pipeline — loading & formatting all 10 datasets | Next |
-| 3 | `phase3/` | QLoRA Setup — PEFT, BitsAndBytes, LoRA config |  Planned |
+| 2 | [`phase2/`](./phase2/) | Data Pipeline — loading & formatting SFT & ORPO datasets |  Done |
+| 3 | `phase3/` | QLoRA Setup — PEFT, BitsAndBytes, LoRA config |  Next |
 | 4 | `phase4/` | Training Loop — SFTTrainer, hyperparameters, monitoring |  Planned |
 | 5 | `phase5/` | Inference & Evaluation — vLLM, self-consistency, ROUGE |  Planned |
 | 6 | `phase6/` | FastAPI Server & Client — deployment architecture | Planned |
 
-### Current Plan (Phase 2)
-**Data Pipeline** — The next step is to understand and reproduce the full data loading and formatting pipeline:
-- Load each of the 10 datasets from HuggingFace (`alpaca`, `dolly`, `hh-rlhf`, `gsm8k`, `MetaMathQA`, `hotpot_qa`, `mmlu`, `commonsense_qa`, `trivia_qa`, `TruthfulQA`)
-- Write a separate formatting function for each dataset that converts raw samples into the standardized prompt format
-- Cap each dataset at 10,000 samples, shuffle, and combine into a single unified dataset
-- Tokenize a sample batch and verify token lengths fit within `max_seq_length = 512`
+### Current Plan (Phase 3)
+**QLoRA Setup** — The next step is to configure the quantization and parameter-efficient fine-tuning layers:
+- Set up **BitsAndBytes** configurations for 4-bit NormalFloat (`nf4`) quantization with double quantization.
+- Configure **PEFT / LoRA** adapters, targeting correct projection layers (`q_proj`, `k_proj`, `v_proj`, `o_proj`, etc.) in the attention mechanism.
+- Verify memory allocation calculations to ensure the quantized model plus adapter weights fit within Google Colab's T4 GPU VRAM limits.
+
 
 ---
 
