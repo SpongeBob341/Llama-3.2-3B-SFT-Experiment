@@ -18,15 +18,16 @@ I want to build a project that produces a working fine-tuned model. The goal now
 | 1 | [`phase1/`](./phase1/) | Tokenizer Explorer — how the model sees text | ✅ Done |
 | 2 | [`phase2/`](./phase2/) | Data Pipeline — loading & formatting SFT & ORPO datasets | ✅ Done |
 | 3 | [`phase3/`](./phase3/) | QLoRA Setup + SFT Training Loop — Unsloth, LoRA, SFTConfig | ✅ Done |
-| 4 | [`phase4/`](./phase4/) | Stage 2 ORPO Alignment — preference learning, safety, hallucination reduction | 🔜 Next |
-| 5 | `phase5/` | Inference & Evaluation — vLLM, self-consistency, ROUGE | ⬜ Planned |
-| 6 | `phase6/` | FastAPI Server & Client — deployment architecture | ⬜ Planned |
+| 4 | [`phase4/`](./phase4/) | Stage 2 ORPO Alignment — preference learning, safety, hallucination reduction | ✅ Done |
+| 5 | [`phase5/`](./phase5/) | Inference & Evaluation — vLLM, self-consistency, ROUGE | 🚧 In Progress |
+| 6 | `phase6/` | FastAPI Server & Client — deployment architecture | 🔜 Next |
 
-### Current Plan (Phase 4.5 — Stage 2 ORPO Alignment)
-**Goal**: Align the Stage 1 SFT model on human preference data to produce the final deployment-ready model.
-- Load Stage 1 adapter (`SpongeBob387/llama3.2-3b-sft-stage1`) via Unsloth, inject fresh LoRA adapters for ORPO training.
-- Run `ORPOTrainer` (β=0.1, LR=8e-5) on Phase 2 ORPO dataset (`SpongeBob387/llama3.2-3b-orpo-dataset`) — UltraFeedback, HH-RLHF Harmless, HaluEval preference pairs.
-- Merge Stage 2 adapter into full 16-bit model and push to `SpongeBob387/llama3.2-3b-orpo-stage2` — this is the final model that goes into Phase 5 (vLLM inference) and Phase 6 (FastAPI server).
+### Current Plan (Phase 5 — Inference & Evaluation)
+**Goal**: Evaluate the Stage 2 ORPO aligned model (`SpongeBob387/llama3.2-3b-orpo-stage2`) using high-throughput vLLM serving, self-consistency sampling, and benchmark metrics.
+- Execute [`phase5/Phase5_Inference_and_Evaluation.ipynb`](./phase5/Phase5_Inference_and_Evaluation.ipynb) on Colab T4/A100 GPU.
+- Evaluate on un-contaminated held-out benchmarks (MMLU, CommonsenseQA, TruthfulQA, GSM8K test split).
+- Benchmark generation performance: ROUGE-L structural similarity and BERTScore semantic quality.
+- Measure inference throughput (tokens/sec) comparing vLLM PagedAttention continuous batching vs standard HuggingFace pipeline.
 
 
 ---
