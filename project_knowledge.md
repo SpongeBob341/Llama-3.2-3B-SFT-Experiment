@@ -455,31 +455,31 @@ MAX_SEQ_LEN = 512          # filter out samples longer than this
 
 ---
 
-### Phase 3 & 4 — QLoRA Setup + SFT Training Loop [IN PROGRESS]
+### Phase 3 & 4 — QLoRA Setup + SFT Training Loop [✅ DONE]
 
 **Folder**: `phase3/`
-**Environment**: Colab GPU (T4 minimum, A100 preferred)
-**Goal**: Load `Llama-3.2-3B` in 4-bit NF4 via Unsloth, attach LoRA adapters, train on Phase 2 SFT dataset via SFTTrainer, push adapter to Hub.
+**Environment**: Colab GPU (T4, tested; A100 recommended for full run)
+**Artifact**: `SpongeBob387/llama3.2-3b-sft-stage1` (private HF Hub repo)
+
+**Final test-run results** (T4, 11k samples, 1 epoch):
+- Train Loss: **1.1717**
+- Eval Loss (best): **1.1367** (step 343, end of epoch)
+- Runtime: **64.8 minutes** (3,889 seconds) on T4
+- Inference quality: ✅ All 3 sanity checks passed (conceptual, math/GSM8K format, factual QA)
 
 **Architecture decision**: Using **Unsloth** over raw HuggingFace stack. Reason: 2-5x faster training, 60% VRAM reduction — makes T4 viable. Produces identical model artifact.
 
-**Reference config extracted from Tan's notebook** (Q002 ANSWERED):
-- `lora_r = 64` (Tan, A100) → we use `r=16` (T4 VRAM budget; ~40M trainable params)
-- `lora_alpha = 16` → same as Tan
-- `lora_dropout = 0.1` (Tan) → we use `0` (required by Unsloth)
-- `target_modules`: q, k, v, o, gate, up, down (7 layers — matches Tan exactly)
-- `load_in_4bit = True` — NF4, double quantization handled internally by Unsloth
-- `max_grad_norm = 0.3` — gradient clipping (matches Tan)
-- `group_by_length = True` — efficiency (matches Tan)
-- `eval_strategy = "steps"` — validation every 200 steps
+**Confirmed config** (T4 test run):
+- `lora_r = 16` (T4; use r=64 on A100 to match Tan)
+- `lora_alpha = 16`, `lora_dropout = 0` (Unsloth requirement)
+- `target_modules`: q, k, v, o, gate, up, down (7 layers)
+- `max_grad_norm = 0.3`, `group_by_length = True`
+- `eval_strategy = "steps"`, `eval_steps = 200`
+- Padding-free batching auto-enabled by Unsloth (more efficient than padding)
 
-**Issues fixed vs. original root-level notebook**:
-- Added `max_grad_norm = 0.3` (was missing)
-- Added `group_by_length = True` (was missing)
-- Added `eval_strategy = "steps"` with eval_steps=200 (was missing)
-- Corrected `weight_decay` from 0.01 → 0.001 (matches Tan)
-- Decode logic fixed to show only generated tokens in sanity check
-- `HF_USERNAME` set to `SpongeBob341`
+**Bugs encountered and resolved** (see B005, B006 in bug log):
+- B005: Unsloth fused CE shape mismatch — fixed with standard CE + min-size alignment
+- B006: TRL SFTConfig migration — fixed by using SFTConfig instead of TrainingArguments
 
 ---
 
@@ -809,6 +809,38 @@ The 4-token-per-sample difference (2044 vs 2048 = 4×1) comes from:
 - Phase 6 (Server + Client): Not started
 
 **Next**: Wait for training to complete, then run inference sanity check (Cell 7) and push adapter to Hub (Cell 8). Update this document with final train loss and runtime.
+
+---
+
+### 2026-08-14 — Phase 3 Complete: Training Run Finished, Adapter Pushed to Hub
+
+**Session goal**: Complete Phase 3 training on T4, validate inference, push adapter.
+
+**Final results**:
+- Train Loss: `1.1717` | Best Eval Loss: `1.1367` (step 343)
+- Runtime: **64.8 minutes** on T4 (faster than expected due to padding-free batching)
+- Adapter pushed to: `SpongeBob387/llama3.2-3b-sft-stage1`
+
+**Inference sanity check (3/3 passed)**:
+1. Supervised vs Unsupervised — correct, detailed, cut off only by max_new_tokens=200
+2. Math word problem — correct answer with GSM8K scratchpad format (`<<60*2.5=150>>`)
+3. Capital of France — correct factual answer with relevant landmarks
+
+**Additional finding — Padding-free batching**:
+Unsloth auto-enabled padding-free batching via SFTConfig (Unsloth 2026.8 feature). Instead of padding all sequences to max_seq_length and computing on pad tokens, it concatenates samples into one long sequence with proper attention masking. This is why training was 15-20 min faster than the ~90 min estimate.
+
+**Warnings logged (non-blocking)**:
+- `max_new_tokens vs max_length`: Unsloth sets max_length=131072 internally; `max_new_tokens=200` correctly overrides it
+- `clean_up_tokenization_spaces=True` on BPE tokenizer: Llama uses BPE, this setting is for WordPiece. Add `tokenizer.clean_up_tokenization_spaces = False` when loading tokenizer in future notebooks.
+
+**State of project**:
+- Phase 1 (Tokenizer): ✅ Complete
+- Phase 2 (Data Pipeline): ✅ Complete
+- Phase 3 (QLoRA SFT): ✅ Complete — adapter at `SpongeBob387/llama3.2-3b-sft-stage1`
+- Phase 4 (Training Loop): Merged into Phase 3 ✅
+- Phase 4.5 (ORPO Alignment): **Next** — merge Stage 1 adapter → run ORPOTrainer
+- Phase 5 (Evaluation): Not started
+- Phase 6 (Server + Client): Not started
 
 ---
 
