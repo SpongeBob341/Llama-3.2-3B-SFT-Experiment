@@ -594,6 +594,8 @@ MAX_SEQ_LEN = 512          # filter out samples longer than this
 | B002 | vLLM is Linux-only. Cannot test server on local Windows machine. | Deployment | By design | Server must run on Colab/Linux |
 | B003 | `@app.on_event("startup")` is deprecated in newer FastAPI versions | Tan's `LLM_Server_Final.py` | Reference only | Use `lifespan` context manager when we build ours |
 | B004 | Response cleaning in Tan's client is brittle (hardcoded prefix check) | Tan's `LLM_Client_Final.py` | Reference only | Build ours more robustly |
+| B005 | **Unsloth fused CE shape mismatch**: `unsloth_zoo >= 2026.8` + `TRL >= 1.10.0` + newer Torch produces `ValueError: Expected input batch_size (2044) to match target batch_size (2048)`. Caused by misaligned chunking of hidden_states vs labels in `accumulate_chunk()`. | `phase3/Phase3_Stage1_QLoRA_SFT.ipynb` | **RESOLVED** | Replace `unsloth_fused_ce_loss` with standard `F.cross_entropy` + `min(logits.size(1), labels.size(1))` alignment. Patch applied as Cell 5 in the notebook. |
+| B006 | **TRL SFTConfig migration**: `TRL >= 0.10.0` deprecated passing `dataset_text_field`, `max_seq_length`, `packing` directly to `SFTTrainer`. These args must now go into `SFTConfig` (which replaces `TrainingArguments` for SFT). | `phase3/Phase3_Stage1_QLoRA_SFT.ipynb` | **RESOLVED** | Notebook updated to use `SFTConfig` exclusively. `SFTConfig` inherits `TrainingArguments` and adds all SFT-specific fields. |
 
 ---
 
@@ -601,7 +603,7 @@ MAX_SEQ_LEN = 512          # filter out samples longer than this
 
 | # | Question | Priority | Context |
 |---|----------|----------|---------|
-| Q001 | What is the exact HuggingFace Hub repo name for our Phase 2 dataset? | **CRITICAL** | Phase 3 notebook cannot run until `SFT_DATASET_REPO` is confirmed. |
+| Q001 | What is the exact HuggingFace Hub repo name for our Phase 2 dataset? | **ANSWERED** | `SpongeBob387/llama3.2-3b-sft-dataset` — confirmed live during Phase 3 test run. Train: 10,974 / Eval: 224 samples. |
 | Q002 | What are Tan's exact LoRA hyperparameters (r, alpha, target_modules)? | **ANSWERED** | r=64, alpha=16, dropout=0.1, target all 7 proj layers. We use r=16/dropout=0 for T4. |
 | Q003 | Which GPU will we use for training — Colab Free T4 or Pro A100? | High | Determines whether r=16 (T4) or r=64 (A100) is used. |
 | Q004 | Does our Phase 2 prompt use `### Input:` or just `Input:`? | **ANSWERED (B001 RESOLVED)** | Uses `### Input:` and `### Response:`. Matches Phase 3 inference format. |
@@ -763,6 +765,50 @@ MAX_SEQ_LEN = 512          # filter out samples longer than this
 - Phase 6 (Server + Client): Not started
 
 **Critical open item**: Q001 — the Phase 2 SFT dataset must be pushed to HuggingFace Hub and its repo name confirmed before Phase 3 notebook can be run. Everything else in Phase 3 is ready.
+
+---
+
+### 2026-08-14 — Phase 3 Live Test Run: Two Bugs Found & Fixed, Training Confirmed Working
+
+**Session goal**: Execute the Phase 3 notebook on Colab T4, validating each cell in sequence.
+
+**Cell-by-cell results**:
+- Cell 1 (Install): ✅ All deps already present, Unsloth cloned from git (commit `08508fd`)
+- Cell 2 (GPU check): ✅ Tesla T4, 14.56GB VRAM, bf16=False (fp16 path active)
+- Cell 3 (HF login): ✅ Logged in as `SpongeBob387`
+- Cell 4 (Config): ✅ All hyperparameters confirmed
+- Cell 5 (Model load): ✅ 28 layers patched, 24.3M trainable params (r=16), pad token correct
+- Cell 6 (Dataset): ✅ Q001 RESOLVED — `SpongeBob387/llama3.2-3b-sft-dataset` live. Train: 10,974 / Eval: 224
+- Cell 7 (Training): ❌ → ❌ → ❌ → ✅ Three-round debugging process (B005 + B006)
+
+**Bugs found and fixed**:
+
+**B005 — Unsloth fused CE shape mismatch** (3 rounds to fix):
+- Round 1: `TorchRuntimeError` — dynamo tracing of chunked CE failed. Fix attempt: `torch_compile=False`. Did not fully work (downgraded to plain ValueError).
+- Round 2: `ValueError: batch_size (2048) vs (2052)` — chunk boundaries misaligned. Fix attempt: wrap original + disable compile. Did not fully work.
+- Round 3: `TypeError: unsupported operand for *: Tensor and GradScaler` — `scaling` arg is a GradScaler object in fp16 mode, not a float. Fix: drop `* scaling`.
+- Round 4: `ValueError: batch_size (2044) vs (2048)` — SFTTrainer appends EOS to labels (seq_len+1), after shift logits=511 tokens vs labels=512. Fix: `seq_len = min(logits.size(1), labels.size(1))` truncation. ✅ Training started.
+
+**B006 — TRL SFTConfig migration** (discovered alongside B005):
+- `TRL >= 0.10.0` deprecated `dataset_text_field`, `max_seq_length`, `packing` as direct `SFTTrainer` args. Must use `SFTConfig` instead of `TrainingArguments`.
+- Fix: replaced `args=TrainingArguments(...)` with `args=SFTConfig(...)` and moved all SFT-specific args inside it.
+
+**Key learning from B005 root cause**:
+The 4-token-per-sample difference (2044 vs 2048 = 4×1) comes from:
+1. SFTTrainer tokenizes each sample and appends EOS → labels have `seq_len + 1` tokens
+2. Model forward pass uses `input_ids` of `seq_len` tokens → hidden_states of `seq_len`
+3. After shift: logits = `seq_len - 1`, labels = `seq_len` → always 1 token off
+4. The `min()` truncation removes the extra label token (the final EOS) — safe because EOS is `ignore_index=-100` in the loss anyway
+
+**State of project at this session**:
+- Phase 1 (Tokenizer): ✅ Complete
+- Phase 2 (Data Pipeline): ✅ Complete (dataset live at `SpongeBob387/llama3.2-3b-sft-dataset`)
+- Phase 3 (QLoRA Setup + Training): 🚧 In Progress — training running on T4 (test run, ~343 steps)
+- Phase 4 (Training Loop): Merged into Phase 3
+- Phase 5 (Evaluation): Not started
+- Phase 6 (Server + Client): Not started
+
+**Next**: Wait for training to complete, then run inference sanity check (Cell 7) and push adapter to Hub (Cell 8). Update this document with final train loss and runtime.
 
 ---
 
