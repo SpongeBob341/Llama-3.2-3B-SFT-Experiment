@@ -83,6 +83,10 @@ Llama-3.2-3B-SFT/
 |   |-- README.md                          <- Our Phase 2 deep-dive notes (data pipeline)
 |   +-- Phase2_Data_Pipeline.ipynb         <- Our Phase 2 data pipeline notebook (Colab)
 |
+|-- phase4/
+|   |-- README.md                          <- Our Phase 4.5 deep-dive notes (ORPO alignment)
+|   +-- Phase4_Stage2_ORPO_Alignment.ipynb <- Our Phase 4.5 ORPO training notebook (Colab)
+|
 |-- [REFERENCE] Llama3.2-3B-final-fine-tune.ipynb  <- Tan's training notebook
 |-- [REFERENCE] LLM_Server_Final.py                <- Tan's FastAPI + vLLM server
 |-- [REFERENCE] LLM_Client_Final.py                <- Tan's CLI chat client
@@ -483,18 +487,25 @@ MAX_SEQ_LEN = 512          # filter out samples longer than this
 
 ---
 
-### Phase 4 — Training Loop [PLANNED]
+### Phase 4.5 — Stage 2 ORPO Alignment [🔜 NEXT]
 
-**Goal**: Run SFTTrainer on our combined dataset
+**Folder**: `phase4/`
+**Environment**: Colab GPU (T4, small run)
+**Goal**: Load Stage 1 SFT adapter, inject fresh LoRA adapters, run `ORPOTrainer` on Phase 2 ORPO preference dataset to produce safety-aligned, hallucination-resistant final model.
 
-**Reference config** (from Tan):
-- `max_seq_length = 512`
-- `num_train_epochs = 1`
-- `effective_batch_size = 32` (per_device_batch_size x gradient_accumulation_steps)
-- `learning_rate = 2e-4`
-- `lr_scheduler = cosine`
-- `optimizer = paged_adamw_32bit`
-- Expected training time: ~2h20min on A100 80GB
+**Datasets**:
+- UltraFeedback Binarized — helpfulness/quality preference pairs
+- HH-RLHF Harmless — safety/refusal preference pairs
+- HaluEval — hallucination mitigation preference pairs
+- Repo: `SpongeBob387/llama3.2-3b-orpo-dataset` (Q005 now ANSWERED)
+
+**Target output**: `SpongeBob387/llama3.2-3b-orpo-stage2` (merged 16-bit, vLLM-compatible)
+
+**Key config (T4 small run)**:
+- `ORPO_BETA = 0.1` (conservative odds-ratio weight)
+- `learning_rate = 8e-5` (40% of Stage 1 LR — prevents catastrophic forgetting)
+- `lora_r = 16`, effective batch = 32 (2 × 16 grad accum)
+- Two forward passes per step (chosen + rejected) — doubles peak VRAM vs SFT
 
 ---
 
@@ -549,6 +560,22 @@ MAX_SEQ_LEN = 512          # filter out samples longer than this
 | `weight_decay` | `0.001` | `0.001` | L2 regularization |
 | `warmup_ratio` | `0.03` | `0.03` | First 3% of steps ramp LR from 0 |
 | `group_by_length` | True | True | Groups similar-length samples for efficiency |
+
+### ORPO Alignment (Stage 2 — Phase 4.5)
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| `orpo_beta` (λ) | `0.1` | Odds-ratio penalty weight. Conservative — SFT component (90%) dominates to preserve Stage 1 skills |
+| `learning_rate` | `8e-5` | 40% of Stage 1 LR — smaller updates reduce catastrophic forgetting risk |
+| `per_device_batch_size` | `2` | ORPO does 2 forward passes/step; batch=2 is safe floor for T4 15GB |
+| `gradient_accumulation_steps` | `16` | Effective batch = 32 (matches Stage 1) |
+| `max_prompt_length` | `256` | Prompt token budget; remaining 256 tokens allocated to response |
+| `max_length` | `512` | Total seq length (prompt + response); matches Phase 2 filter setting |
+| `lr_scheduler_type` | `cosine` | Matches Stage 1 |
+| `warmup_ratio` | `0.03` | First 3% of steps ramp LR from 0 — prevents early instability |
+| `weight_decay` | `0.001` | Matches Stage 1 |
+| `max_grad_norm` | `0.3` | Gradient clipping — matches Stage 1 |
+| `optim` | `paged_adamw_32bit` | Pages optimizer states to CPU — critical for VRAM budget with dual forward passes |
 
 ### Inference (Reference Values)
 
@@ -841,6 +868,38 @@ Unsloth auto-enabled padding-free batching via SFTConfig (Unsloth 2026.8 feature
 - Phase 4.5 (ORPO Alignment): **Next** — merge Stage 1 adapter → run ORPOTrainer
 - Phase 5 (Evaluation): Not started
 - Phase 6 (Server + Client): Not started
+
+---
+
+### 2026-08-14 — Phase 4.5 ORPO Alignment Notebook Built
+
+**Session goal**: Build the Phase 4.5 Stage 2 ORPO alignment notebook and all associated documentation.
+
+**Work done**:
+- Confirmed Q003 (GPU = T4) and Q005 (ORPO dataset = `SpongeBob387/llama3.2-3b-orpo-dataset`)
+- Created `phase4/` directory with `Phase4_Stage2_ORPO_Alignment.ipynb` (8 cells)
+- Created `phase4/README.md` with full section-by-section breakdown, ORPO theory, choices & whys
+- Updated root `README.md`: added `phase4/` row, status = 🔜 Next
+- Updated `project_knowledge.md`: Phase 4.5 section, ORPO hyperparameter registry, journal entry
+
+**Key design decisions in notebook**:
+- Load Stage 1 adapter directly via `FastLanguageModel.from_pretrained(STAGE1_ADAPTER)` — no separate merge step needed
+- Inject fresh Stage 2 LoRA adapters via `get_peft_model()` — clean optimization surface for ORPO
+- `ORPO_BETA = 0.1` — conservative, SFT component dominates (90%) to preserve Stage 1 skills
+- `learning_rate = 8e-5` — 40% of Stage 1 LR, prevents catastrophic forgetting
+- `per_device_batch_size = 2` — ORPO's 2 forward passes doubles peak VRAM; batch=2 is T4 safe floor
+- Push both LoRA adapter (~160MB) and merged 16-bit model (~6.7GB) to Hub
+- Merged model (`SpongeBob387/llama3.2-3b-orpo-stage2`) is the artifact for Phase 5 vLLM inference
+
+**State of project**:
+- Phase 1 (Tokenizer): ✅ Complete
+- Phase 2 (Data Pipeline): ✅ Complete
+- Phase 3 (QLoRA SFT): ✅ Complete — adapter at `SpongeBob387/llama3.2-3b-sft-stage1`
+- Phase 4.5 (ORPO Alignment): 🚧 In Progress — notebook ready, must run on Colab T4
+- Phase 5 (Evaluation): Not started
+- Phase 6 (Server + Client): Not started
+
+**Next immediate action**: Run `phase4/Phase4_Stage2_ORPO_Alignment.ipynb` on Colab T4. Watch `rewards/margins` metric — should increase steadily from step 1.
 
 ---
 
